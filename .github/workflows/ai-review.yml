@@ -27,7 +27,8 @@ jobs:
       # or executed; the diff is read through the API. So a PR cannot loosen the rules it is reviewed against.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          # The target branch's latest commit (base.sha goes stale once the branch moves on).
+          ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
 
       - uses: ./.github/actions/setup-reviewer

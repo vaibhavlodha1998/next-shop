@@ -35,7 +35,10 @@ export async function runReview(opts: RunOptions) {
   // 01 Ingest + 02 Fetch PR
   const { data: pr } = await o.pulls.get({ ...r, pull_number: opts.pr });
   const sha = pr.head.sha;
-  const baseSha = pr.base.sha;
+  // Rules, config and context come from the target branch's LATEST commit. pr.base.sha is where the base
+  // stood when the PR was opened and goes stale as the branch moves on. The PR still cannot change these files.
+  const baseRef = pr.base.ref;
+  const baseSha = (await o.repos.getBranch({ ...r, branch: baseRef })).data.commit.sha;
   const record: Record<string, any> = {
     pr: opts.pr, sha, baseSha, trigger: opts.trigger, run: runUrl(),
     models: { reviewer: modelIds.reviewer(), verifier: modelIds.verifier() },
@@ -69,8 +72,12 @@ export async function runReview(opts: RunOptions) {
     return finish('restricted', 'Repo is marked restricted; nothing was reviewed.');
   }
   if (!rules.length) {
-    await setStatus(o, r, sha, 'success', `No rules found in ${cfg.ruleFiles.join(', ')} on the base branch`);
-    return finish('no-rules', `No rules found in ${cfg.ruleFiles.join(', ')} at base.`);
+    const where = `${cfg.ruleFiles.join(', ')} on ${baseRef}@${baseSha.slice(0, 7)}`;
+    const why = missing.length
+      ? `missing file(s): ${missing.join(', ')}`
+      : 'no rule lines found; each rule must be a top-level bullet like "- [GEN-001] ..." with no indentation';
+    await setStatus(o, r, sha, 'success', `No rules in ${where}`);
+    return finish('no-rules', `No rules found in ${where}: ${why}. Merge the ai-review-analyze PR or add rules to ${baseRef}.`);
   }
 
   // 04 Policy gate
