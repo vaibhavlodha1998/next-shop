@@ -1,0 +1,66 @@
+name: ai-review
+
+# Steps 01-10: every PR gets a first-pass review against the repo's own rules.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write   # post the review
+  issues: write          # drafts / security issues
+  statuses: write        # "ai-review" commit status
+  models: read           # GitHub Models with GITHUB_TOKEN, no API key needed
+
+# A new push cancels the running review; approval is tied to the exact commit anyway.
+concurrency:
+  group: ai-review-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Reviewer code, skills and rules all come from the TARGET branch. PR code is never checked out
+      # or executed; the diff is read through the API. So a PR cannot loosen the rules it is reviewed against.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-reviewer
+
+      - name: Review
+        working-directory: .ai-review/reviewer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_REQUIRED: 'true'
+          AI_REVIEW_OUT: ${{ runner.temp }}/ai-review
+          # Optional overrides (Settings > Secrets and variables > Actions). Empty = GitHub Models defaults.
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
+          VERIFIER_MODEL: ${{ vars.VERIFIER_MODEL }}
+          AI_REVIEW_MODE: ${{ vars.AI_REVIEW_MODE }}
+        run: npx tsx src/cli/review.ts
+
+      # Never leave the PR showing "AI review running" after a crash.
+      - name: Mark review as errored
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh api "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}"
+          -f state=error -f context=ai-review -f description="AI review job failed, see the run log"
+          -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Keep the review record
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ai-review-pr${{ github.event.pull_request.number }}-${{ github.run_attempt }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/ai-review
+          if-no-files-found: ignore
+          retention-days: 30

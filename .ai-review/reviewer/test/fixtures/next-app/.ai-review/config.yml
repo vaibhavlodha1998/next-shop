@@ -1,0 +1,34 @@
+# AI PR reviewer settings for this repo. Read from the TARGET branch of each PR.
+
+# shadow: drafts wait in an issue until an approver replies /approve (recommended to start)
+# direct: comments are posted straight to the PR
+mode: shadow
+
+# GitHub usernames allowed to /approve or /reject drafts. Empty = anyone with write access.
+approvers: []
+# GitHub usernames for security escalations (secrets, critical security findings). Empty = repo owner/admins.
+securityApprovers: []
+
+# true = this repo is never reviewed
+restricted: false
+
+# Files holding the rules (owned by this repo's team). ai-review analyze drafts starter rules here if there are none.
+ruleFiles:
+  - AGENTS.md
+
+# Added to the built-in excludes (env files, fixtures with customer data, vendored and generated code, lockfiles)
+excludePaths: []
+
+# Skills to switch off for this repo, e.g. [java-review]
+disabledSkills: []
+
+# Tuned for the GitHub Models free tier: High tier (gpt-4.1) = 10 requests/min, 50/day, 8000 input tokens/request
+limits:
+  maxFiles: 15
+  maxModelCalls: 20
+  concurrency: 2
+  minIntervalMs: 6500
+  minConfidence: 0.6
+  maxComments: 25
+  # ai-review analyze: one call per module (fast model, 150/day) plus one for starter rules
+  maxAnalyzeCalls: 12

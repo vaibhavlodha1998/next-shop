@@ -1,0 +1,5 @@
+# Host repos often ignore only the root node_modules, so keep the reviewer's own install out of git.
+reviewer/node_modules/
+reviewer/.mastra/
+reviewer/.ai-review-out/
+reviewer/.env

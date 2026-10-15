@@ -1,0 +1,62 @@
+name: ai-review-analyze
+
+# Learns the project once so every review has context. Opens a PR with .ai-review/project-context.md
+# (and starter rules in AGENTS.md if the repo has none). Nothing is trusted until a human merges that PR.
+#   Run it: Actions > ai-review-analyze > Run workflow, or comment "/ai-review analyze" on any issue or PR.
+on:
+  workflow_dispatch:
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: '0 4 1 * *'   # monthly refresh; no PR is opened when nothing changed
+
+permissions:
+  contents: write        # pushes the ai-review/analyze branch (never the default branch)
+  pull-requests: write   # opens the PR
+  issues: write          # replies to the comment that triggered it
+  models: read           # GitHub Models
+
+concurrency:
+  group: ai-review-analyze
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    if: >-
+      github.event_name != 'issue_comment' || (
+        startsWith(github.event.comment.body, '/ai-review analyze') &&
+        github.event.comment.user.type != 'Bot' &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Default branch only: the analysis must describe trusted code.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-reviewer
+
+      - name: Analyze project
+        working-directory: .ai-review/reviewer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_REQUIRED: 'true'
+          AI_REVIEW_OUT: ${{ runner.temp }}/ai-review
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
+          VERIFIER_MODEL: ${{ vars.VERIFIER_MODEL }}
+          ANALYST_MODEL: ${{ vars.ANALYST_MODEL }}
+        run: npx tsx src/cli/analyze.ts
+
+      - name: Keep the record
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ai-review-analyze-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-review
+          if-no-files-found: ignore
+          retention-days: 30

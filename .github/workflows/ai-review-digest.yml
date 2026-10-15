@@ -1,0 +1,32 @@
+name: ai-review-digest
+
+# Weekly digest of dismissed / down-voted AI comments per rule, for the rule maintainers.
+on:
+  schedule:
+    - cron: '30 3 * * 1'   # Mondays 03:30 UTC (09:00 IST)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .ai-review/reviewer/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: .ai-review/reviewer
+      - run: npx tsx src/cli/digest.ts
+        working-directory: .ai-review/reviewer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

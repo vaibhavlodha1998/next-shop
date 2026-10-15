@@ -1,0 +1,64 @@
+name: ai-review-commands
+
+# Human touchpoints, all inside GitHub:
+#   drafts / security issue:   /approve   /reject
+#   PR conversation:           /ai-review rerun
+#   reply to an AI comment:    why?   show an example   /ai dismiss   /ai wrong-rule
+# Issue-comment workflows always run from the default branch, so commands cannot be changed by a PR.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+  models: read
+
+concurrency:
+  group: ai-review-cmd-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  command:
+    # Cheap filter so ordinary comments do not start a runner.
+    if: >-
+      github.event.comment.user.type != 'Bot' &&
+      !startsWith(github.event.comment.body, '/ai-review analyze') && (
+        startsWith(github.event.comment.body, '/') ||
+        (github.event_name == 'pull_request_review_comment' && github.event.comment.in_reply_to_id)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-reviewer
+
+      - name: Handle command
+        working-directory: .ai-review/reviewer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_REQUIRED: 'true'
+          AI_REVIEW_OUT: ${{ runner.temp }}/ai-review
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
+          VERIFIER_MODEL: ${{ vars.VERIFIER_MODEL }}
+          RESPONDER_MODEL: ${{ vars.RESPONDER_MODEL }}
+          AI_REVIEW_MODE: ${{ vars.AI_REVIEW_MODE }}
+        run: npx tsx src/cli/command.ts
+
+      - name: Keep the record
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ai-review-cmd-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-review
+          if-no-files-found: ignore
+          retention-days: 30

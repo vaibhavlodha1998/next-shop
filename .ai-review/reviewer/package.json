@@ -1,0 +1,35 @@
+{
+  "name": "ai-pr-reviewer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "mastra dev",
+    "build": "mastra build",
+    "start": "mastra start",
+    "review": "tsx --env-file-if-exists=.env src/cli/review.ts",
+    "command": "tsx --env-file-if-exists=.env src/cli/command.ts",
+    "digest": "tsx --env-file-if-exists=.env src/cli/digest.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/e2e.mjs",
+    "analyze": "tsx --env-file-if-exists=.env src/cli/analyze.ts"
+  },
+  "dependencies": {
+    "@mastra/core": "1.77.0",
+    "@octokit/rest": "22.0.1",
+    "picomatch": "4.0.7",
+    "tsx": "4.23.15",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/picomatch": "^4.0.3",
+    "mastra": "1.34.1",
+    "typescript": "^6.0.3"
+  },
+  "description": "AI pull request reviewer POC: Mastra agents on GitHub Models, run by GitHub Actions"
+}

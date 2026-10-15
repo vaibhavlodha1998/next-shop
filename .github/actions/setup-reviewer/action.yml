@@ -1,0 +1,29 @@
+name: Set up AI reviewer
+description: Installs Node, the reviewer's dependencies and Gitleaks.
+inputs:
+  gitleaks-version:
+    description: Gitleaks release to install
+    default: '8.30.1'
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: .ai-review/reviewer/package-lock.json
+
+    - name: Install Gitleaks
+      shell: bash
+      env:
+        V: ${{ inputs.gitleaks-version }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/bin"
+        curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz" | tar -xz -C "$RUNNER_TEMP/bin" gitleaks
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/bin/gitleaks" version
+
+    - name: Install reviewer dependencies
+      shell: bash
+      working-directory: .ai-review/reviewer
+      run: npm ci --no-audit --no-fund
