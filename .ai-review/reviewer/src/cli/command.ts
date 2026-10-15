@@ -16,6 +16,9 @@ import type { FindingMarker } from '../pipeline/render';
 import { answerInThread } from '../pipeline/respond';
 import { runReview } from '../pipeline/run';
 import { writeRecord } from '../pipeline/record';
+import { makeToolEnv } from '../pipeline/run';
+import { redactPii } from '../lib/policy';
+import picomatch from 'picomatch';
 
 const WRITE = ['admin', 'maintain', 'write'];
 
@@ -49,7 +52,10 @@ async function main() {
     const fb = body.match(/^\/ai\s+(dismiss|wrong-rule)\b/i);
     if (fb) return feedback(o, r, pr, comment.id, parent.id, finding, actor, fb[1].toLowerCase() as 'dismiss' | 'wrong-rule');
     if (/\b(why|explain|example|how)\b|\?\s*$/i.test(body)) {
-      const url = await answerInThread(o, r, { pr, parentId: parent.id, questionId: comment.id, parentDiffHunk: parent.diff_hunk, finding, question: body, asker: actor });
+      const url = await answerInThread(o, r, {
+        pr, parentId: parent.id, questionId: comment.id, parentDiffHunk: parent.diff_hunk, finding, question: body, asker: actor,
+        tools: await responderTools(o, r, finding),
+      });
       writeRecord(`respond-${comment.id}`, { kind: 'responder', pr, ruleId: finding.ruleId, asker: actor, url }, `Responder answered @${actor} on PR #${pr} (${finding.ruleId}): ${url}`);
     }
   }
@@ -126,6 +132,17 @@ async function feedback(o: Octokit, r: RepoRef, pr: number, replyId: number, par
     body: `Recorded \`${kind}\` for rule \`${f.ruleId}\`. It will show up in the weekly digest for the rule maintainers.`,
   });
   writeRecord(`feedback-${replyId}`, { kind: 'feedback', feedback: kind, pr, ruleId: f.ruleId, path: f.path, line: f.line, actor }, `@${actor} marked ${f.ruleId} on PR #${pr} as ${kind}.`);
+}
+
+/** Tool mode for the Responder: the finding's file at the commit it was made for, everything else from the default branch checkout. */
+async function responderTools(o: Octokit, r: RepoRef, f: FindingMarker) {
+  const cfg = parseConfig(await readRepoFile(o, r, CONFIG_PATH, f.sha).catch(() => null));
+  if (!cfg.reviewer.tools) return null;
+  const head = await readRepoFile(o, r, f.path, f.sha).catch(() => null);
+  const isPii = picomatch(cfg.piiRedactPaths, { dot: true });
+  const headFiles = new Map<string, string[]>();
+  if (head != null) headFiles.set(f.path, (isPii(f.path) ? redactPii(head).text : head).split('\n'));
+  return { env: makeToolEnv(cfg, headFiles), maxToolSteps: Math.min(2, cfg.reviewer.maxToolSteps), maxToolOutputChars: cfg.reviewer.maxToolOutputChars };
 }
 
 main().catch((e) => {

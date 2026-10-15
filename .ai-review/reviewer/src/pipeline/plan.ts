@@ -19,6 +19,8 @@ export interface ReviewTask {
   skills: Skill[];
   skillsText: string;
   contextText: string;
+  /** Tool mode: skill folders offered in the on-demand catalog (review-core stays inline). */
+  skillPaths: string[];
   chunks: Hunk[][];
   /** How far hunks were widened to enclosing code (0 = plain diff). */
   expandedRadius: number;
@@ -64,12 +66,19 @@ export function plan(
     if (omitted) notes.push(`${file.path}: ${omitted} rules did not fit the prompt budget and were not checked`);
 
     const skills = skillsForFile(allSkills, file.path);
-    const skillsText = fitSkills(skills, SKILLS_BUDGET);
-
+    const tools = cfg.reviewer.tools;
+    // Tool mode: only review-core is inlined; the rest sit in a catalog and are loaded with the `skill` tool when needed.
+    const inline = tools ? skills.filter((sk) => sk.name === 'review-core') : skills;
+    const onDemand = tools ? skills.filter((sk) => sk.name !== 'review-core') : [];
+    const skillsText = fitSkills(inline, SKILLS_BUDGET);
     const contextText = ctx ? renderContextFor(ctx, file.path) : '';
+    // Room kept free for what tools add during the loop: tool schemas, the catalog, loaded skills and tool results.
+    const toolReserve = tools
+      ? 300 + 60 * onDemand.length + 350 * Math.min(2, onDemand.length) + estimateTokens('x'.repeat(cfg.reviewer.maxToolOutputChars))
+      : 0;
 
     const fixed =
-      estimateTokens(REVIEWER_INSTRUCTIONS) + estimateTokens(rulesText) + estimateTokens(skillsText) + estimateTokens(contextText) + SCHEMA_AND_WRAPPER;
+      estimateTokens(REVIEWER_INSTRUCTIONS) + estimateTokens(rulesText) + estimateTokens(skillsText) + estimateTokens(contextText) + SCHEMA_AND_WRAPPER + toolReserve;
     const diffBudget = Math.max(800, INPUT_TOKEN_BUDGET - fixed);
     const plain = chunkHunks(file.parsed.hunks, diffBudget, estimateTokens);
     let chunks = plain;
@@ -86,16 +95,19 @@ export function plan(
       }
     }
 
-    if (callsLeft <= 0) {
+    // Worst case per chunk: one request per tool step plus the final answer (unused calls are refunded).
+    const perChunk = tools ? 1 + cfg.reviewer.maxToolSteps : 1;
+    const affordable = Math.floor(callsLeft / perChunk);
+    if (affordable <= 0) {
       skipped.push({ path: file.path, reason: 'model call budget for this run used up' });
       continue;
     }
-    if (chunks.length > callsLeft) {
-      notes.push(`${file.path}: only ${callsLeft} of ${chunks.length} diff chunks reviewed (call budget)`);
-      chunks = chunks.slice(0, callsLeft);
+    if (chunks.length > affordable) {
+      notes.push(`${file.path}: only ${affordable} of ${chunks.length} diff chunks reviewed (call budget)`);
+      chunks = chunks.slice(0, affordable);
     }
-    callsLeft -= chunks.length;
-    tasks.push({ file, rules, rulesText, skills, skillsText, contextText, chunks, expandedRadius });
+    callsLeft -= chunks.length * perChunk;
+    tasks.push({ file, rules, rulesText, skills, skillsText, contextText, skillPaths: onDemand.map((sk) => sk.dir), chunks, expandedRadius });
   }
   return { tasks, skipped, notes };
 }

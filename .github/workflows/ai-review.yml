@@ -44,6 +44,7 @@ jobs:
           REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
           VERIFIER_MODEL: ${{ vars.VERIFIER_MODEL }}
           AI_REVIEW_MODE: ${{ vars.AI_REVIEW_MODE }}
+          AI_REVIEW_TOOLS: ${{ vars.AI_REVIEW_TOOLS }}
         run: npx tsx src/cli/review.ts
 
       # Never leave the PR showing "AI review running" after a crash.

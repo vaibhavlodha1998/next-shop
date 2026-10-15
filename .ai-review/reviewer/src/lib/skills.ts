@@ -17,6 +17,8 @@ export interface Skill {
   paths: string[];
   /** Load only when the project depends on one of these packages (e.g. ["next"]). Empty = always. */
   requires: string[];
+  /** Folder holding SKILL.md (handed to Mastra's native skills in tool mode). */
+  dir: string;
   body: string;
 }
 
@@ -37,6 +39,7 @@ export function loadSkills(dir: string, disabled: string[] = []): Skill[] {
       owner: String(meta.owner ?? 'platform'),
       paths: Array.isArray(meta.paths) ? meta.paths : ['**'],
       requires: Array.isArray(meta.requires) ? meta.requires : [],
+      dir: path.join(dir, name),
       body: (m ? m[2] : raw).trim(),
     });
   }

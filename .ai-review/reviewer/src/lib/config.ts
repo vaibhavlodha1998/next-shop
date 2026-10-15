@@ -2,6 +2,9 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 
+/** The repo on disk: the PR's base commit in the review workflow, the default branch elsewhere. Read-only tools read unchanged files from here. */
+export const repoRoot = () => path.resolve(process.env.REPO_ROOT || process.env.GITHUB_WORKSPACE || path.join(process.cwd(), '..', '..'));
+
 /** Where this reviewer project lives (skills are owned centrally, here). */
 export const reviewerRoot = () => path.resolve(process.env.REVIEWER_ROOT || process.cwd());
 
@@ -38,6 +41,15 @@ const limitsSchema = z.object({
   maxAnalyzeCalls: z.number().int().positive().default(12),
 });
 
+const reviewerSchema = z.object({
+  /** Agentic mode: the Reviewer may call read-only tools (read_file, find_usages) and load skills on demand. */
+  tools: z.boolean().default(true),
+  /** Model steps that may call tools before the Reviewer must answer. Each step is one model request. */
+  maxToolSteps: z.number().int().min(0).max(6).default(2),
+  /** Total characters all tool results may add per file chunk (keeps every request under the provider's token cap). */
+  maxToolOutputChars: z.number().int().positive().default(8000),
+});
+
 const configSchema = z.object({
   /** shadow: drafts wait for /approve in a review issue. direct: publish straight to the PR. */
   mode: z.enum(['shadow', 'direct']).default('shadow'),
@@ -56,6 +68,7 @@ const configSchema = z.object({
   /** Skill names to switch off for this repo. */
   disabledSkills: z.array(z.string()).default([]),
   limits: limitsSchema.default(limitsSchema.parse({})),
+  reviewer: reviewerSchema.default(reviewerSchema.parse({})),
 });
 
 export type ReviewConfig = z.infer<typeof configSchema> & { excludeGlobs: string[] };
@@ -65,6 +78,9 @@ export function parseConfig(yamlText: string | null): ReviewConfig {
   const cfg = configSchema.parse(raw);
   const envMode = process.env.AI_REVIEW_MODE;
   if (envMode === 'shadow' || envMode === 'direct') cfg.mode = envMode;
+  // Repo variable AI_REVIEW_TOOLS=false switches to single-call mode without editing the config.
+  if (process.env.AI_REVIEW_TOOLS === 'false') cfg.reviewer.tools = false;
+  if (process.env.AI_REVIEW_TOOLS === 'true') cfg.reviewer.tools = true;
   const excludeGlobs = cfg.replaceDefaultExcludes ? cfg.excludePaths : [...DEFAULT_EXCLUDES, ...cfg.excludePaths];
   return { ...cfg, excludeGlobs };
 }

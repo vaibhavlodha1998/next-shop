@@ -5,6 +5,10 @@ import { loadRules } from '../lib/rules';
 import { loadSkills, skillsForProject } from '../lib/skills';
 import { applyPolicy, redactPii, scanLines, type PrFile } from '../lib/policy';
 import { CONTEXT_PATH, parseContext } from '../analyze/context';
+import { listFiles, isCode } from '../analyze/scan';
+import { setPace, modelRequests } from '../mastra/steps';
+import type { ToolEnv } from '../mastra/tools';
+import { repoRoot, type ReviewConfig } from '../lib/config';
 import picomatch from 'picomatch';
 import { CallBudget } from '../lib/limiter';
 import { modelIds } from '../mastra/models';
@@ -117,8 +121,12 @@ export async function runReview(opts: RunOptions) {
   }
 
   // 06 Review each file (model) + 07 Verify findings (model)
-  const budget = new CallBudget(cfg.limits.maxModelCalls, cfg.limits.concurrency, cfg.limits.minIntervalMs);
-  const reviewed = await reviewAll(planned.tasks, budget);
+  // Pacing is applied before every model request (tool-loop steps included) by the RatePacer processor.
+  setPace(cfg.limits.minIntervalMs);
+  const requestsBefore = modelRequests();
+  const budget = new CallBudget(cfg.limits.maxModelCalls, cfg.limits.concurrency, 0);
+  const toolEnv: ToolEnv | null = cfg.reviewer.tools ? makeToolEnv(cfg, fileLines) : null;
+  const reviewed = await reviewAll(planned.tasks, budget, cfg, toolEnv);
   const verified = await verifyAll(reviewed.findings, planned.tasks, budget, cfg.limits.minConfidence, cfg.limits.maxComments);
   const notes = [
     ...planned.notes,
@@ -126,7 +134,8 @@ export async function runReview(opts: RunOptions) {
     ...verified.errors.map((e) => `Verifier error: ${e}`),
   ];
   Object.assign(record, {
-    modelCalls: budget.used,
+    modelCalls: modelRequests() - requestsBefore,
+    agent: { mode: toolEnv ? 'tools' : 'single-call', maxToolSteps: cfg.reviewer.maxToolSteps, traces: reviewed.traces },
     rawFindings: reviewed.findings.length,
     kept: verified.kept,
     dropped: verified.dropped.map((d) => ({ path: d.finding.path, line: d.finding.line, ruleId: d.finding.ruleId, stage: d.stage, reason: d.reason })),
@@ -176,4 +185,18 @@ function packageDeps(json: string | null): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+/** What the read-only tools may see: changed files at the PR head, everything else from the base checkout, policy applied. */
+export function makeToolEnv(cfg: ReviewConfig, headFiles: Map<string, string[]>): ToolEnv {
+  const root = repoRoot();
+  const excluded = picomatch([...cfg.excludeGlobs, '.git/**', '**/node_modules/**'], { dot: true });
+  let cache: string[] | null = null;
+  return {
+    root,
+    headFiles,
+    isBlocked: (p) => excluded(p),
+    isPii: picomatch(cfg.piiRedactPaths, { dot: true }),
+    codeFiles: () => (cache ??= [...new Set([...listFiles(root, cfg.excludeGlobs).filter(isCode), ...headFiles.keys()])].slice(0, 2000)),
+  };
 }

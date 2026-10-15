@@ -52,6 +52,7 @@ jobs:
           VERIFIER_MODEL: ${{ vars.VERIFIER_MODEL }}
           RESPONDER_MODEL: ${{ vars.RESPONDER_MODEL }}
           AI_REVIEW_MODE: ${{ vars.AI_REVIEW_MODE }}
+          AI_REVIEW_TOOLS: ${{ vars.AI_REVIEW_TOOLS }}
         run: npx tsx src/cli/command.ts
 
       - name: Keep the record

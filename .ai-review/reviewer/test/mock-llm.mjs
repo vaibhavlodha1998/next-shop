@@ -43,7 +43,39 @@ http
         res.writeHead(400, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ error: { message: "Invalid parameter: 'response_format' of type 'json_schema' is not supported with this model.", type: 'invalid_request_error' } }));
       }
-      log.push({ path: req.url, model: json.model, auth: req.headers.authorization ? 'set' : 'missing', response_format: json.response_format?.type, chars: body.length, prompt: text });
+      const toolNames = (json.tools ?? []).map((t) => t.function?.name);
+      const toolMsgs = (json.messages ?? []).filter((m) => m.role === 'tool');
+      log.push({
+        path: req.url, model: json.model, auth: req.headers.authorization ? 'set' : 'missing', response_format: json.response_format?.type,
+        chars: body.length, prompt: text, tools: toolNames, toolChoice: json.tool_choice, toolResults: toolMsgs.map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
+      });
+
+      // Tool mode. The Reviewer keeps exploring (load a skill, read files, find usages) until tools are switched off;
+      // the Responder reads one file, then answers. This exercises the step cap and forced final answer.
+      const rounds = (json.messages ?? []).filter((m) => m.role === 'assistant' && m.tool_calls?.length).length;
+      const toolCall = (calls) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({
+          id: 'mock-' + Date.now(), object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: json.model,
+          choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: null,
+            tool_calls: calls.map(([name, args], i) => ({ id: `call_${rounds}_${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })) } }],
+          usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+        }));
+      };
+      if (text.includes('ROLE: REVIEWER') && toolNames.includes('read_file') && json.tool_choice !== 'none' && rounds < 5) {
+        const skill = (text.match(/<name>([a-z-]+-review)<\/name>/) ?? [])[1];
+        const calls = [];
+        if (rounds === 0 && skill && toolNames.includes('skill')) calls.push(['skill', { name: skill }]);
+        const file = (text.match(/^FILE: (\S+)/m) ?? [])[1] ?? '';
+        // Read the reviewed file itself when it is the legacy one (secret masking check), else a helper it depends on.
+        if (rounds === 0) calls.push(['read_file', { path: file.endsWith('legacy.ts') ? file : 'src/lib/auth.ts', startLine: null, endLine: null }]);
+        if (rounds === 0) calls.push(['read_file', { path: '.env.local', startLine: null, endLine: null }]);
+        calls.push(['find_usages', { symbol: rounds === 0 ? 'getSession' : 'addToCart' }]);
+        return toolCall(calls);
+      }
+      if (text.includes('ROLE: RESPONDER') && toolNames.includes('read_file') && rounds === 0 && json.tool_choice !== 'none') {
+        return toolCall([['read_file', { path: 'src/lib/auth.ts', startLine: null, endLine: null }]]);
+      }
 
       if (text.includes('ROLE: REVIEWER')) {
         // Pick the first added line number from the numbered diff, plus one bogus finding the verifier must drop.

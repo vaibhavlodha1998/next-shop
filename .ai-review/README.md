@@ -2,7 +2,7 @@
 
 A first-pass reviewer for pull requests. It learns your project once, then reviews every PR against your own rules with that context. Every comment cites a rule, and humans keep the final say.
 
-- **Agents (Mastra):** Analyst, Rule writer, Reviewer, Verifier, Responder
+- **Agents (Mastra):** Analyst, Rule writer, Reviewer, Verifier, Responder. The Reviewer and Responder use **on-demand skills and read-only tools**
 - **Runs in GitHub Actions:** no servers to run
 - **Models:** the GitHub Models free tier, using the workflow's own token, so no API key is needed
 - **Repos:** works on any repo and any language, private repos on a free account included
@@ -34,11 +34,37 @@ Rerun the analysis after big structural changes. It also runs on the 1st of each
 | 1-2 | The PR event fires; the diff is fetched through the API. PR code is never checked out or run | |
 | 3 | Rules (`AGENTS.md`), config and project context are read from the **base** branch, so a PR cannot change its own rules | |
 | 4 | Policy gate. A secret on an added line stops the run and opens a security issue. A secret already in unchanged code is masked from the model. Env files, lockfiles, vendored and generated code are skipped. PII in test files is redacted | |
-| 5 | Plan. For each file: matching rules, skills (`nextjs-review` loads only if the project uses `next`), its module's context, and the **whole enclosing function** from the head commit, all within the token budget | |
-| 6 | **Reviewer** (gpt-4.1) reviews each file | ✅ |
+| 5 | Plan. For each file: matching rules, its module's context, the **whole enclosing function** from the head commit, and the skills catalog for that file (`nextjs-review` only if the project uses `next`), all within the token budget | |
+| 6 | **Reviewer agent** (gpt-4.1) per file: loads a skill on demand, may call read-only tools (`read_file`, `find_usages`) for up to 2 steps, then must answer with typed findings | ✅ |
 | 7 | Contract check (the cited rule must exist; the line must be an added line), then the **Verifier** (gpt-4.1-mini) | ✅ |
 | 8 | `shadow` mode, or any critical security finding, sends drafts to an issue to wait for `/approve` | |
 | 9-10 | Inline comments citing rules, a commit status, and a JSON record kept as a workflow artifact | |
+
+## Agents, skills and tools
+
+**Rules say what. Skills say how. Tools let the agent check.**
+
+| Agent | Model | Tools | Job |
+|---|---|---|---|
+| Analyst | fast | none (code is sampled for it) | Summarises each module during `analyze` |
+| Rule writer | large | none | Drafts starter rules when a repo has none |
+| Reviewer | large | `skill`, `read_file`, `find_usages` | Reviews one file's diff against the rules; returns typed findings |
+| Verifier | fast | none | Keeps only findings that cite a real rule on a changed line and hold up |
+| Responder | large | `read_file`, `find_usages` | Answers `why?` and `show an example` in review threads |
+
+- **Skills** are [Agent Skills](https://agentskills.io) folders in `reviewer/skills/`, loaded through Mastra's native skills support. For each file the Reviewer sees a catalog of only the skills that match it (by path, and by dependency for framework skills), and loads one with the `skill` tool when it needs it. `review-core` is always inline.
+- **Tools are read-only.**
+  - Files changed in the PR are read at the PR's commit; everything else comes from the base checkout.
+  - Excluded paths (env files, keys, lockfiles, vendored or generated code) are refused.
+  - Test files are PII-redacted, and any line the secret scan flags is masked before the model sees it.
+- **Hard limits on the loop:**
+  - Tools are switched off after `maxToolSteps` steps, so the next step must be the answer.
+  - Tool output is capped per file, and every model request is paced.
+  - Each run stays inside its call budget, and unused calls are refunded.
+- **Agents never write.** Only the pipeline scripts post to GitHub, after their own checks.
+- **Every review record** (workflow artifact) lists, per file, the steps taken, skills loaded, tool calls and whether the answer was forced.
+
+Set `reviewer.tools: false` (or the repo variable `AI_REVIEW_TOOLS=false`) for single-call mode: one request per file with the skills inlined.
 
 ## Commands
 
@@ -54,6 +80,7 @@ Rerun the analysis after big structural changes. It also runs on the 1st of each
 - **`mode`:** `shadow` (drafts wait for `/approve`) or `direct`
 - **People:** `approvers`, `securityApprovers`
 - **Scope:** `restricted`, `ruleFiles`, `excludePaths`, `disabledSkills`
+- **`reviewer`:** `tools` (agentic mode on or off), `maxToolSteps`, `maxToolOutputChars`
 - **`limits`:** files, model calls, pacing and comment caps per run. `maxAnalyzeCalls` is for the analysis
 
 To switch model provider without changing code, set repository variables: `LLM_BASE_URL`, `REVIEWER_MODEL`, `VERIFIER_MODEL`, `ANALYST_MODEL`, and the secret `LLM_API_KEY`. Any OpenAI-compatible endpoint works.
@@ -68,7 +95,8 @@ GitHub Models free tier limits each request to **8,000 input tokens**:
 So prompts are budgeted to fit and split when needed, and each run is capped.
 
 - **One analysis:** one fast-model call per module, plus one large-model call for rules.
-- **One small PR review:** 3 to 6 calls.
+- **One small PR review:** with tools, up to 3 calls per file plus 1 for the Verifier. A 3-file PR uses about 10, so expect around 5 reviews a day on gpt-4.1. Single-call mode uses about 4.
+- **Paid model or another provider:** raise `limits.maxModelCalls` and set `minIntervalMs: 0`.
 
 ## Local runs
 
@@ -90,7 +118,7 @@ npm run dev                    # Mastra playground with all five agents
   project-context.md         written by analyze, edited by you
   reviewer/                  the Mastra project
     src/analyze/             scan, context file, analysis run
-    src/mastra/              agents, models, guardrails, schemas
+    src/mastra/              agents, read-only tools, step control and pacing, models, guardrails, schemas
     src/pipeline/            plan, review, verify, deliver, respond, record
     src/lib/                 config, rules, diff, policy gate, skills, GitHub helpers
     src/cli/                 analyze.ts, review.ts, command.ts, digest.ts

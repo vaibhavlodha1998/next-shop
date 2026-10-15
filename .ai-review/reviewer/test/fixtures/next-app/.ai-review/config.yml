@@ -22,6 +22,13 @@ excludePaths: []
 # Skills to switch off for this repo, e.g. [java-review]
 disabledSkills: []
 
+# Agentic review: the Reviewer loads skills on demand and may call read-only tools
+# (read_file, find_usages) before answering. tools: false = one request per file, skills inlined.
+reviewer:
+  tools: true
+  maxToolSteps: 2            # model steps that may call tools; the next step must answer
+  maxToolOutputChars: 8000   # cap on tool results per file, keeps each request under the 8k-token limit
+
 # Tuned for the GitHub Models free tier: High tier (gpt-4.1) = 10 requests/min, 50/day, 8000 input tokens/request
 limits:
   maxFiles: 15

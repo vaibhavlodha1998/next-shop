@@ -14,12 +14,15 @@ export async function generateStructured<T extends z.ZodType>(
   prompt: string,
   schema: T,
   modelSettings: { temperature?: number; maxOutputTokens?: number },
+  /** Extra execution options, e.g. tools, maxSteps, requestContext, per-call processors (tool mode). */
+  extra: Record<string, unknown> = {},
 ): Promise<z.infer<T>> {
   const call = (prompted: boolean) =>
     agent.generate(prompt, {
+      ...extra,
       structuredOutput: { schema, ...(prompted ? { jsonPromptInjection: true as const } : {}) },
       modelSettings,
-    });
+    } as any);
   const triedPrompted = usePrompt; // the mode THIS call used (another call may flip the flag meanwhile)
   let res;
   try {

@@ -18,6 +18,11 @@ export class CallBudget {
     return this.max - this.used;
   }
 
+  /** Give back calls reserved but not used (a tool loop that finished early). */
+  refund(n: number) {
+    this.used = Math.max(0, this.used - Math.max(0, n));
+  }
+
   /** Reserve n calls up front; returns false if the budget cannot cover them. */
   reserve(n = 1): boolean {
     if (this.used + n > this.max) return false;

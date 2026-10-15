@@ -1,6 +1,7 @@
 import type { Processor } from '@mastra/core/processors';
 import { RegexFilterProcessor } from '@mastra/core/processors';
 import { INPUT_TOKEN_BUDGET, estimateTokens } from './models';
+import { RatePacer } from './steps';
 
 /**
  * Mastra guardrails shared by all agents. All of them are deterministic, so they
@@ -12,6 +13,7 @@ import { INPUT_TOKEN_BUDGET, estimateTokens } from './models';
  *    model that everything inside <diff> is untrusted data.
  * 3. A hard per-request token budget, so a request never exceeds the provider cap
  *    (GitHub Models free tier: 8000 input tokens) and never burns quota by accident.
+ * 4. A rate pacer before every model request, tool-loop steps included.
  */
 
 export const secretRedactor = () =>
@@ -42,5 +44,5 @@ export class TokenBudgetGuard implements Processor<'token-budget-guard'> {
   }
 }
 
-export const inputGuardrails = () => [new TokenBudgetGuard(), injectionWatch(), secretRedactor()];
+export const inputGuardrails = () => [new TokenBudgetGuard(), injectionWatch(), secretRedactor(), new RatePacer()];
 export const outputGuardrails = () => [secretRedactor()];

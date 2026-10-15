@@ -199,13 +199,32 @@ try {
   assert.ok(btn, 'button file reviewed');
   assert.match(btn.prompt, /PROJECT CONTEXT/);
   assert.match(btn.prompt, /Module src\/components/);
-  assert.match(btn.prompt, /Skill: nextjs-review/);
-  assert.doesNotMatch(btn.prompt, /Skill: java-review/);
   assert.match(btn.prompt, /^ \s*\d+ \| export function AddToCartButton/m, 'enclosing component signature shown, beyond GitHub\'s 3 context lines');
   const rec7 = lastRecord('review-pr7');
   assert.ok(rec7.plan.files.every((f) => f.projectContext), 'context for every file');
   assert.ok(rec7.plan.files.some((f) => f.expandedRadius > 0), 'hunks widened');
-  ok('context, nextjs-review skill (java-review not loaded) and the whole enclosing component reached the Reviewer');
+  ok('project context and the whole enclosing component reached the Reviewer');
+
+  step('agentic review: skills on demand + read-only tools, capped steps');
+  assert.deepEqual([...btn.tools].sort(), ['find_usages', 'read_file', 'skill'], 'only read-only tools and the skill loader are offered');
+  assert.match(btn.prompt, /Skill: review-core/, 'review-core inline');
+  assert.doesNotMatch(btn.prompt, /### Skill: nextjs-review/, 'framework skills are not inlined in tool mode');
+  assert.match(btn.prompt, /<name>nextjs-review<\/name>/, 'nextjs-review offered in the catalog');
+  assert.doesNotMatch(btn.prompt, /java-review/, 'irrelevant skills not even listed');
+  const btnSteps = reviewPrompts.filter((e) => e.prompt.includes('FILE: src/components/AddToCartButton.tsx'));
+  const results = btnSteps.flatMap((e) => e.toolResults).join('\n');
+  assert.match(results, /Next\.js 16 differs from older versions/, 'skill body loaded via the skill tool');
+  assert.match(results, /export async function getSession/, 'read_file returned the helper');
+  assert.match(results, /src\/app\/admin\/page\.tsx:\d+:/, 'find_usages found callers');
+  assert.match(results, /excluded by the review policy/, '.env.local refused');
+  assert.ok(btnSteps.at(-1).tools.length === 0 || btnSteps.at(-1).toolChoice === 'none', 'tools switched off at the step cap');
+  assert.equal(rec7.agent.mode, 'tools');
+  const trace = rec7.agent.traces.find((t) => t.path === 'src/components/AddToCartButton.tsx');
+  assert.equal(trace.steps, 3);
+  assert.equal(trace.forcedAnswer, true);
+  assert.ok(trace.skillsLoaded.includes('nextjs-review'));
+  assert.ok(trace.toolCalls.some((c) => c.note === 'refused by policy'));
+  ok(`loop per file: skill loaded, ${trace.toolCalls.length} tool calls, answer forced at step ${trace.steps}; ${rec7.modelCalls} model requests in total`);
 
   s = await state();
   const drafts = s.issues.at(-1);
@@ -228,6 +247,8 @@ try {
   cli('command.ts', {}, await humanReply(7, parent.id, '/ai dismiss'));
   s = await state();
   assert.equal(s.reviewComments.filter((c) => c.in_reply_to_id === parent.id && c.user.type === 'Bot').length, 2);
+  const responder = (await llmLog()).filter((e) => e.prompt.includes('ROLE: RESPONDER'));
+  assert.ok(responder[0].tools.includes('read_file') && responder.some((e) => e.toolResults.join('').includes('getSession')), 'Responder used read_file');
   assert.deepEqual(s.prLabels['7'], ['ai-feedback:dismissed']);
   assert.match(cli('digest.ts'), /Digest:/);
   ok('why? answered, /ai dismiss labelled, digest issue created');
@@ -252,6 +273,9 @@ try {
   assert.ok(p9.includes('FILE: src/lib/legacy.ts'));
   assert.ok(!p9.includes(FAKE_STRIPE), 'existing secret not sent');
   assert.match(p9, /line hidden: possible secret in unchanged code/);
+  const p9tools = (await llmLog()).slice(n2).flatMap((e) => e.toolResults ?? []).join('\n');
+  assert.ok(p9tools.includes('src/lib/legacy.ts') || p9tools.includes('LEGACY_'), 'the agent read the file through read_file');
+  assert.ok(!p9tools.includes(FAKE_STRIPE), 'read_file masked the secret too');
   const rec9 = lastRecord('review-pr9');
   assert.equal(rec9.policy.hiddenContext.length, 1);
   ok('the existing key was masked in the diff and the surrounding code withheld; the PR was still reviewed');
@@ -276,6 +300,15 @@ try {
   assert.equal(s.issues.length, 0);
   assert.equal(s.statuses.at(-1).state, 'success');
   ok(`${s.reviewComments.length} comments published, commit status success`);
+
+  step('single-call mode (AI_REVIEW_TOOLS=false): one request per file, skills inlined');
+  const n3 = (await llmLog()).length;
+  assert.equal(outcome(cli('review.ts', { PR_NUMBER: '7', AI_REVIEW_TOOLS: 'false' })), 'published');
+  const single = (await llmLog()).slice(n3).filter((e) => e.prompt.includes('ROLE: REVIEWER'));
+  assert.equal(single.length, 3, 'one request per file');
+  assert.ok(single.every((e) => !e.tools.length), 'no tools offered');
+  assert.ok(single.some((e) => /### Skill: nextjs-review/.test(e.prompt)), 'framework skill inlined');
+  ok('3 reviewer requests, no tools, skills inlined');
 
   await startMocks({ mode: 'direct', noCritical: true, rejectSchema: true });
   step('falls back to prompt-injected JSON when the provider rejects json_schema');
