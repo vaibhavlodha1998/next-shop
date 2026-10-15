@@ -1,4 +1,5 @@
 import type { MastraModelConfig } from '@mastra/core/llm';
+import type { ModelWithRetries } from '@mastra/core/agent';
 
 /**
  * Model wiring. Defaults to GitHub Models (free tier, OpenAI-compatible),
@@ -36,11 +37,29 @@ export const modelIds = {
   analyst: () => process.env.ANALYST_MODEL || process.env.VERIFIER_MODEL || 'openai/gpt-4.1-mini',
 };
 
+/**
+ * Fallback chain (Mastra model fallbacks): if the primary model errors, for example a model the provider no
+ * longer serves properly, the same request goes to FALLBACK_MODEL (default: the verifier model, gpt-4.1-mini).
+ * Set FALLBACK_MODEL=none to disable.
+ */
+export const fallbackModelId = () => {
+  const v = process.env.FALLBACK_MODEL || modelIds.verifier();
+  return v === 'none' ? null : v;
+};
+function chain(id: string): MastraModelConfig | ModelWithRetries[] {
+  const fb = fallbackModelId();
+  if (!fb || fb === id) return model(id);
+  return [
+    { id: 'primary', model: model(id), maxRetries: 1 },
+    { id: 'fallback', model: model(fb), maxRetries: 2 },
+  ];
+}
+
 // Resolved per call so env changes (tests, CLI flags) are honoured.
-export const reviewerModel = () => model(modelIds.reviewer());
+export const reviewerModel = () => chain(modelIds.reviewer());
 export const verifierModel = () => model(modelIds.verifier());
-export const responderModel = () => model(modelIds.responder());
-export const analystModel = () => model(modelIds.analyst());
+export const responderModel = () => chain(modelIds.responder());
+export const analystModel = () => chain(modelIds.analyst());
 
 /** GitHub Models free tier caps every request at 8000 input tokens. Keep a margin. */
 export const INPUT_TOKEN_BUDGET = Number(process.env.LLM_INPUT_TOKEN_BUDGET || 7000);
