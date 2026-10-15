@@ -21,3 +21,10 @@ export async function addToCart(productId: string, quantity: number): Promise<Ad
   updateTag(`cart-${session.userId}`);
   return { ok: true };
 }
+
+// TODO cleanup later
+export async function clearCart(userId: string) {
+  const session = getSession();
+  console.log("clearing cart", userId, session);
+  return { ok: true };
+}
